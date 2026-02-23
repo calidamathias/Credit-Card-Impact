@@ -1,0 +1,662 @@
+---
+title: "Project2-Team 43"
+author: "Jiayi Lang, Evanna Shen, Calida Mathias, Crystal Zhang, Jade Tsai"
+format: html
+editor: visual
+---
+
+## Project 2-Team 43
+
+-   Does being approved for a retailer credit card increase customer spending in the next 90 days?
+
+### Part 1 - Introduction
+
+In this project, we act as a retail analytics consulting team supporting a mid-sized U.S. omni-channel apparel retailer with a large e-commerce business that offers a *store-branded credit card*. Leadership is considering whether to expand credit-card approvals (e.g., loosen cutoffs or increase pre-approval outreach) to drive short-term revenue.
+
+**Client decision question:** *What is the causal impact of being approved for the retailer credit card on customer spending over the next 90 days, and should we expand approvals?*
+
+**Why this is hard:** approval is not random---customers who are approved often differ systematically (income, credit score, prior spending, responsiveness) from those who are not. If we simply compare approved vs. not approved customers, we risk attributing pre-existing differences to the card.
+
+This project evaluates whether being approved for a retailer credit card causes customers to spend more at the retailer over the next 90 days. A simple comparison of approved vs. not-approved customers can be misleading because approval decisions are typically targeted (e.g., based on income, credit score, and prior spending). That targeting creates selection bias: customers who are more likely to be approved may also have higher underlying spending even without the card.
+
+To study the causal effect in a controlled setting, we simulate a realistic customer-level dataset that includes key observed drivers of both approval and spending (age, income, credit score, prior 90-day spend, and promotion response), plus an unobserved confounder that affects both approval and outcomes. We also include a pre-approval mailer (targeted outreach) that increases the probability of approval. In practice, retailers often target outreach using observed credit attributes (e.g., credit score bands). We mirror that reality by allowing mailer receipt to vary with observed credit score, while ensuring the mailer has no direct effect on spending in the data-generating process. This supports an instrumental variables (IV) approach under conditional exogeneity: after controlling for observed covariates used for targeting (credit score, income, prior spend, etc.), mailer assignment provides plausibly exogenous variation in approval.
+
+We compare several estimation approaches---naive regression, regression adjustment, an "oracle" model that also conditions on the unobserved confounder (for benchmarkinwg), and 2SLS (IV)---to illustrate how estimates change when we address observed and unobserved sources of bias. The end objective is to translate these results into practical guidance for stakeholders considering whether (and how) to expand credit-card approvals.
+
+### Part 2 - Summary
+
+**Business question:** **Does credit-card approval increase retailer spending in the following 90 days?**
+
+-   **Challenge:** Approval is not random; it is correlated with customer quality and baseline spending → naive comparisons are biased.
+-   **Data:** Simulated customer dataset with observed covariates + an unobserved confounder; includes a pre-approval mailer used as an instrument.
+-   **Methods compared:** Naive regression, regression adjustment, oracle regression (with the unobserved confounder), and IV / 2SLS.
+-   **Key takeaway:** The naive model overstates the impact of approval. Regression adjustment reduces---but does not fully remove---bias when unobserved confounding remains. IV (2SLS) isolates a causal effect for customers whose approval is influenced by the mailer (a local effect).
+-   **Implication:** Targeted approval expansion via marketing outreach can drive incremental spend, but impact estimates should rely on designs that address selection (e.g., outreach-based IV with rich controls / conditional exogeneit), not simple approved vs. not-approved comparisons.
+
+The raw difference in spending between approved vs. not approved customers overstates the impact of approval because approval is targeted toward higher-propensity spenders. After controlling for observed covariates, the estimated lift shrinks, and the IV results isolate a more credible causal effect for customers whose approval is influenced by the targeted outreach mailer (a "local" effect).
+
+**What we deliver to the client:** - A clear estimate of incremental 90-day spend attributable to approval (with uncertainty), - Evidence of selection bias in naive comparisons, - A client-ready recommendation: use outreach and policy changes strategically near the approval margin, rather than broadly expanding approvals across all applicants.
+
+### Part 3 - Data Simulation
+
+We used the prompt as stated below to generate the data:
+
+:   You are a Lead Data Scientist at a consulting firm specializing in the retail and finance sector. Write R code to simulate a dataset for a client project. The goal is to evaluate the causal effect of being approved for a retailer credit card (Treatment) on customer spending in the next 90 days (Outcome). This simulation must be designed to demonstrate Regression Adjustment, Omitted Variable Bias (OVB), and Instrumental Variable (IV) analysis. Include realistic pre-treatment covariates, a skewed nonnegative spend outcome, a targeted treatment assignment to create selection bias, and export to CSV in R.
+
+```{r}
+# Simulation script for retail credit-card causal analysis
+# - Purpose: demonstrate Regression Adjustment, OVB, and IV (2SLS)
+# - Outputs two CSVs:
+#    1) full_simulation_with_truth.csv  (contains U, Y0, Y1 for evaluation)
+#    2) observed_dataset_for_analysis.csv (only variables an analyst would have)
+# Author: Lead Data Scientist (simulated)
+# Date: run-time
+
+set.seed(2026)  # reproducible
+
+# -------------------------
+# PARAMETERS
+# -------------------------
+n <- 20000  # sample size (increase for more precision)
+shape_gamma <- 1.5  # Gamma shape (<2 => strong skew); adjust for skewness
+true_tau <- 0.30     # true multiplicative treatment effect on mean scale (30% increase)
+# Note: we apply treatment multiplicatively via the mean of Gamma
+
+# -------------------------
+# SIMULATE PRE-TREATMENT COVARIATES
+# -------------------------
+# Age: 18-80, some distribution skewed towards middle-aged customers
+age <- round(rbeta(n, 2, 2) * 62 + 18)  # approx 18-80
+
+# Income: annual household income in USD (skewed)
+income <- round(exp(rnorm(n, log(60000), 0.8)))  # median ~60k, log-normal skewed
+
+# Credit score: 300-850, correlated with income somewhat
+credit_score <- round(pmin(850, pmax(300, rnorm(n, 650 + 0.0005 * (income - 60000), 60))))
+
+# Prior 90-day spend at retailer (pre-treatment), skewed
+prior_spend <- rgamma(n, shape = 1.2, scale = 150)  # mean ~180, skewed
+
+# Promo responsiveness (observed pre-treatment survey/behavior indicator)
+promo_responded <- rbinom(n, 1, prob = plogis(-1 + 0.5 * (prior_spend > 100)))  # more likely if prior_spend>100
+
+# Unobserved confounder U (financial discipline / preference) -- NOT included in observed dataset
+# U increases both probability of applying/being approved (or being targeted) and spend
+U <- rnorm(n, 0, 1)  # mean-zero latent trait
+
+# Instrument: pre-approval mailer (encourages applying/approval)
+# Mailer receipt is targeted on observed credit_score to reflect real outreach targeting
+# IMPORTANT: instrument must not have direct effect on Y in the data-generating outcome equation below
+preapproval_mailer <- rbinom(n, 1, prob = plogis(-3 + 0.008*(credit_score - 650)))  # low baseline, increases with credit_score slightly
+
+# -------------------------
+# TREATMENT ASSIGNMENT: Targeted approval (selection bias)
+# -------------------------
+# Model approval probability as a function of observed covariates + U + instrument
+# This generates selection bias because U is unobserved in analysis
+logit_p_treat <- -5 +
+  0.004 * (credit_score - 650) +    # better credit -> higher chance
+  0.00003 * (income - 60000) +     # higher income slightly helps
+  0.008 * (prior_spend) +          # prior spend strongly predicts approval (retailer favors high spenders)
+  0.6 * promo_responded +          # responsive customers slightly more likely
+  0.9 * preapproval_mailer +       # instrument: mailer strongly increases approval probability
+  0.8 * U                          # unobserved confounder increases both approval and spend
+p_treat <- plogis(logit_p_treat)
+treatment <- rbinom(n, 1, prob = p_treat)  # "approved for retailer credit card"
+
+# -------------------------
+# POTENTIAL OUTCOMES (skewed nonnegative spend over next 90 days)
+# -------------------------
+# We model mean spend via an exponential of a linear predictor (keeps mean positive)
+# Treatment effect is multiplicative on mean: mu1 = mu0 * (1 + true_tau)
+# Include U in outcome generating process (confounder).
+#
+# Linear predictor for log-mean:
+beta0 <- log(50)   # baseline intercept (on log-mean scale)
+b_income <- 0.000005   # per dollar (small)
+b_credit <- 0.002      # per credit-score point
+b_prior <- 0.003       # per dollar prior spend (small but matters)
+b_age <- -0.005        # older -> slightly lower spend
+b_promo <- 0.15        # promo responders spend more
+b_U <- 0.20            # unobserved confounder effect on log-mean
+
+# Mean under no-treatment (mu0)
+lp0 <- beta0 +
+  b_income * income +
+  b_credit * (credit_score - 650) +
+  b_prior * prior_spend +
+  b_age * (age - 40) +
+  b_promo * promo_responded +
+  b_U * U
+
+mu0 <- exp(lp0)  # positive mean for Gamma
+
+# Mean under treatment (mu1): multiplicative effect
+mu1 <- mu0 * (1 + true_tau)  # treatment increases mean by true_tau proportion
+
+# Draw potential outcomes from Gamma distribution with mean mu and shape parameter
+# For Gamma we need scale = mu / shape
+Y0 <- rgamma(n, shape = shape_gamma, scale = mu0 / shape_gamma)
+Y1 <- rgamma(n, shape = shape_gamma, scale = mu1 / shape_gamma)
+
+# Observed outcome
+spend90 <- ifelse(treatment == 1, Y1, Y0)
+
+# -------------------------
+# TRUE EFFECTS (for evaluation)
+# -------------------------
+# True ATE and ATT (on raw spend scale)
+ATE_true <- mean(Y1 - Y0)
+ATT_true <- mean(Y1[treatment == 1] - Y0[treatment == 1])
+
+cat(sprintf("True ATE (mean difference) = $%0.2f\n", ATE_true))
+cat(sprintf("True ATT (mean difference among treated) = $%0.2f\n", ATT_true))
+
+# -------------------------
+# BUILD DATAFRAMES and EXPORT
+# -------------------------
+# Full dataset (contains truth, includes U and potential outcomes) - for evaluator only
+full_df <- data.frame(
+  id = 1:n,
+  age = age,
+  income = income,
+  credit_score = credit_score,
+  prior_spend = round(prior_spend, 2),
+  promo_responded = promo_responded,
+  preapproval_mailer = preapproval_mailer,
+  treatment = treatment,
+  spend90 = round(spend90, 2),
+  Y0 = round(Y0, 2),
+  Y1 = round(Y1, 2),
+  U = round(U, 3),
+  p_treat = round(p_treat, 4)  # approval probability used
+)
+
+# Observed dataset: what an analyst would realistically see (no U, no counters)
+observed_df <- subset(full_df, select = c("id", "age", "income", "credit_score",
+                                          "prior_spend", "promo_responded",
+                                          "preapproval_mailer", "treatment", "spend90"))
+
+# Export both CSVs
+write.csv(full_df, "full_simulation_with_truth.csv", row.names = FALSE)
+write.csv(observed_df, "observed_dataset_for_analysis.csv", row.names = FALSE)
+cat("Wrote CSVs:\n - full_simulation_with_truth.csv\n - observed_dataset_for_analysis.csv\n")
+
+# -------------------------
+# QUICK ANALYSIS DEMONSTRATING OVB, Regression Adjustment, and IV (2SLS)
+# -------------------------
+
+# 1) Naive regression (treatment only)
+naive_lm <- lm(spend90 ~ treatment, data = observed_df)
+summary_naive <- summary(naive_lm)
+coef_naive <- coef(summary_naive)["treatment", c("Estimate","Std. Error","Pr(>|t|)")]
+cat("\nNaive regression (no controls):\n")
+print(coef_naive)
+
+# 2) Regression adjustment with observed covariates (this still omits U -> OVB remains)
+reg_adj <- lm(spend90 ~ treatment + age + income + credit_score + prior_spend + promo_responded,
+              data = observed_df)
+summary_regadj <- summary(reg_adj)
+coef_regadj <- coef(summary_regadj)["treatment", c("Estimate","Std. Error","Pr(>|t|)")]
+cat("\nRegression adjustment (observed covariates only, U omitted):\n")
+print(coef_regadj)
+
+# 3) Regression that (illegally) controls U (only possible with full data) - shows reduction of bias
+reg_with_U <- lm(spend90 ~ treatment + age + income + credit_score + prior_spend + promo_responded + U,
+                 data = full_df)
+summary_with_U <- summary(reg_with_U)
+coef_with_U <- coef(summary_with_U)["treatment", c("Estimate","Std. Error","Pr(>|t|)")]
+cat("\nRegression including U (not available in practice) -- demonstrates true confounding removal:\n")
+print(coef_with_U)
+
+# 4) Instrumental Variables (manual 2SLS)
+# First stage: regress treatment on instrument + observed covariates
+fs <- lm(treatment ~ preapproval_mailer + age + income + credit_score + prior_spend + promo_responded,
+         data = observed_df)
+# fitted values (predicted probability of treatment)
+observed_df$treatment_hat <- predict(fs, newdata = observed_df)
+
+# Second stage: regress outcome on fitted treatment and covariates
+iv_2sls <- lm(spend90 ~ treatment_hat + age + income + credit_score + prior_spend + promo_responded,
+              data = observed_df)
+coef_2sls <- coef(summary(iv_2sls))["treatment_hat", c("Estimate","Std. Error","Pr(>|t|)")]
+cat("\nManual 2SLS (first stage uses instrument):\n")
+print(coef_2sls)
+
+# For convenience: compute first-stage F-statistic for instrument strength
+# Regress treatment on covariates (without instrument)
+fs_reduced <- lm(treatment ~ age + income + credit_score + prior_spend + promo_responded,
+                 data = observed_df)
+ss_full <- summary(fs)
+ss_reduced <- summary(fs_reduced)
+# Compute F-stat for instrument by comparing the two models (anova)
+anova_fs <- anova(fs_reduced, fs)
+cat("\nFirst-stage ANOVA comparing reduced vs full (instrument significance):\n")
+print(anova_fs)
+
+# 5) (optional) If AER::ivreg is available, show consistent estimate with standard IV routine
+if(requireNamespace("AER", quietly = TRUE)) {
+  library(AER)
+  iv_mod <- AER::ivreg(spend90 ~ treatment + age + income + credit_score + prior_spend + promo_responded |
+                        preapproval_mailer + age + income + credit_score + prior_spend + promo_responded,
+                      data = observed_df)
+  cat("\nAER::ivreg 2SLS summary (if AER is installed):\n")
+  print(summary(iv_mod, diagnostics = TRUE))
+} else {
+  cat("\nPackage AER not installed — skipped AER::ivreg. Manual 2SLS above is provided.\n")
+}
+
+# -------------------------
+# COMPARISON SUMMARY
+# -------------------------
+estimates <- data.frame(
+  estimator = c("Naive (t only)", "Reg adj (observed covs)", "Reg incl U (oracle)", "2SLS (manual)"),
+  estimate = c(coef_naive["Estimate"], coef_regadj["Estimate"], coef_with_U["Estimate"], coef_2sls["Estimate"])
+)
+# Convert to dollars (estimates are mean differences in spend)
+rownames(estimates) <- NULL
+cat("\nEstimator comparison (estimates are mean $ differences):\n")
+print(estimates)
+
+cat(sprintf("\nReminder: True ATT (treated) = $%0.2f   (saved in 'full_simulation_with_truth.csv')\n", ATT_true))
+cat("Use 'observed_dataset_for_analysis.csv' to practice causal methods (it omits U and counterfactuals).\n")
+
+```
+
+To validate the data generation process, we employed multiple regression specifications to ensure the data adhered to our structural instructions. First, the naive estimator of **727.6280** substantially overestimates the treatment effect. This confirms that treatment assignment was targeted rather than random; the simple difference in means conflates the causal effect with the pre-existing higher spending potential of approved customers, leading to positive selection bias. Second, the regression adjustment with observed covariates produced an estimate of **-987.3772**. This result highlights the impact of unobserved confounding and nonlinearity. Despite controlling for observed variables, conditioning on strong predictors of treatment distorted the remaining variation used for identification. Consequently, the estimator is not only biased but---as indicated by the negative value---incorrectly signed. Then, in the oracle regression that includes the unobserved confounder, confounding bias is removed by construction. However, the estimated treatment effect remains biased relative to the true causal effect because the outcome-generating process is multiplicative with a log-linked mean, while the regression is specified as linear in levels. This functional form misspecification leads to a misleading estimate despite conditioning on all relevant confounders. Finally, the IV estimator identifies a local average treatment effect (LATE) for customers whose approval status is influenced by the mailer, which differs from the overall ATT by construction and yielded a large coefficient **5281.6298** due to the skewed, multiplicative nature of the outcome and heterogeneous effects. Overall, these results demonstrate that while traditional linear models fail to recover the true treatment effect due to selection bias, unobserved confounding, and functional form misspecification, they successfully validate that our data generation process correctly captures the complex, non-linear dependencies intended in our simulation.
+
+-   Distribution of the Target Variable(Y)
+
+We defined the target variable, **`spend90`** (customer spending in the next 90 days), using a Gamma-distributed outcome with a log-linked mean. Our formulation is as follows:
+
+$$
+Y_i \sim \text{Gamma}(\text{shape},\ \text{scale}=\mu_i/\text{shape}),\qquad\log(\mu_i)=\beta_0+\beta_X X_i+\delta D_i+\gamma U_i
+$$
+
+Our simulated `spend90` reflects this with extreme right-skewness. Because the data-generating process uses a Gamma distribution with a log-linked mean, the outcome is strictly positive and multiplicative in covariates, which closely mirrors retail spending behavior. The log transformation reduces skewness but the underlying distribution remains Gamma rather than log-normal.
+
+-   Distribution of the Treatment Variable(D)
+
+We defined the treatment variable, **`treatment`** (card approval), as a Bernoulli random variable where the probability of success $P(D=1)$ is determined by a sigmoid (logistic) function. We modeled the approval probability to depend on observed covariates (Income, Credit Score) and the unobserved confounder ($U$).(The latent U is the source of selection bias (confounder). It is not included in observed_dataset_for_analysis.csv --- this replicates real-world OVB.) This creates the necessary **selection bias** for the project, as wealthier and more creditworthy individuals are more likely to be approved (Correlation with Income = 0.54).
+
+-   Instrumental Variable(Z)
+
+We define `preapproval_mailer` as an outreach variable that increases the probability a customer is approved. Unlike a fully randomized experiment, the mailer is targeted using observed credit score, reflecting common retail practice (marketing uses observable credit attributes to decide who receives pre-approval outreach). For identification, we rely on conditional exogeneity: once we control for the observed variables used for targeting (credit score, income, age, prior spending, and promo responsiveness), mailer receipt is assumed to be unrelated to unobserved determinants of spending. In our simulation, the mailer does not enter the outcome equation, so it affects spending only through approval. We assess instrument validity by confirming relevance via a strong first-stage relationship between mailer receipt and approval; and checking balance on observed covariates across mailer groups to support the conditional independence assumption.
+
+-   Unobserved Confounder(U)
+
+We defined `U` as a standard normal variable representing a hidden trait to demonstrate OVB. We would include this variable in the generation of both treatment and outcome but will exclude it from the analysis dataset. Its presence induces endogeneity, forcing the use of Instrumental Variable methods to recover the true causal effect.
+
+-   Observed Covariates(X)
+
+There are four variables we used as necessary controls: `age`, `income`, `credit_score`, `prior_spend`.
+
+-   Below is a graph of DAG to better understand the generated dataset.
+
+<!-- -->
+
+    income   credit_score   prior_spend   age   promo_responded
+      \          |               |          /          /
+       v          v               v         v          v
+            (observed covariates)
+                    |
+                    v
+    preapproval_mailer ---> Approved ---> Spend90
+                         ^        ^
+                         |        |
+                         +--- U (unobserved confounder)
+
+### Part 4 - EDA
+
+1\. Basic Descriptive Statistics
+
+```{r}
+df <- observed_df
+stopifnot(is.data.frame(df))
+library(dplyr)
+library(ggplot2)
+eda_summary <- df %>%
+  group_by(treatment) %>%
+  summarise(
+    n = n(),
+    avg_spend90 = mean(spend90),
+    median_spend90 = median(spend90),
+    avg_prior_spend = mean(prior_spend),
+    avg_income = mean(income),
+    avg_credit_score = mean(credit_score),
+    avg_age = mean(age)
+  )
+
+eda_summary
+
+```
+
+The table shows that customers who are approved for the retailer credit card spend much more in the following 90 days than those who are not approved. The difference is large both in terms of average and median spending.
+
+At the same time, approved customers look very different even before approval. They have higher prior spending, higher income, and better credit scores. This suggests that approval is not random and is likely targeted toward customers who are already more valuable, which raises concerns about omitted variable bias in a simple regression analysis.
+
+2\. The Distribution of the Outcome
+
+```{r}
+ggplot(df, aes(x = spend90)) +
+  geom_histogram(bins = 50, fill = "steelblue", alpha = 0.7) +
+  scale_x_continuous(trans = "log1p") +
+  labs(
+    title = "Distribution of 90-Day Spending",
+    x = "90-Day Spending (log scale)",
+    y = "Number of Customers"
+  )
+
+```
+
+This figure shows the distribution of customer spending over the 90-day post-approval window. The outcome variable is highly right-skewed, with a long upper tail indicating that a small fraction of customers account for a disproportionate share of total spending. While most customers exhibit relatively modest spending levels, a limited number of high-spending customers generate very large values.
+
+This distributional pattern suggests that modeling spending in levels may be sensitive to extreme observations. As a result, while we visualize spending on a log scale to mitigate the influence of extreme values, all regression models are estimated in levels to remain consistent with the simulation design and to report treatment effects in dollar terms.
+
+3\. Approved vs Not Approved
+
+```{r}
+ggplot(df, aes(x = factor(treatment), y = spend90)) +
+  geom_boxplot(fill = "lightgray") +
+  scale_y_continuous(trans = "log1p") +
+  labs(
+    x = "Credit Card Approved (0 = No, 1 = Yes)",
+    y = "90-Day Spending (log scale)",
+    title = "Spending by Credit Card Approval Status"
+  )
+
+
+```
+
+This figure compares the distribution of 90-day spending between customers who are approved for the retailer credit card and those who are not approved. On average, approved customers exhibit substantially higher spending levels, as reflected by a higher median and upper quartile of the spending distribution.
+
+However, the dispersion of spending is also much larger among approved customers, with a significantly heavier upper tail. This pattern suggests that approval is associated not only with higher average spending, but also with greater heterogeneity in spending outcomes. Because approval is not randomly assigned, these differences likely reflect both the causal effect of credit card approval and underlying differences in customer characteristics, such as baseline purchasing propensity and financial capacity.
+
+As a result, the observed gap in spending distributions cannot be interpreted as a causal effect without accounting for selection and endogeneity, motivating the use of regression adjustment and instrumental variables in subsequent analysis.
+
+4\. Selection Evidence
+
+```{r}
+selection_table <- df %>%
+  group_by(treatment) %>%
+  summarise(
+    avg_prior_spend = mean(prior_spend),
+    avg_income = mean(income),
+    avg_credit_score = mean(credit_score),
+    avg_age = mean(age)
+  )
+
+selection_table
+
+ggplot(df, aes(x = prior_spend, fill = factor(treatment))) +
+  geom_density(alpha = 0.4) +
+  scale_x_continuous(trans = "log1p") +
+  labs(
+    fill = "Approved",
+    title = "Prior Spending by Credit Card Approval Status",
+    x = "Prior Spending (log scale)",
+    y = "Density"
+  )
+
+
+```
+
+> This figure plots the distribution of prior spending by credit card approval status. Approved customers exhibit substantially higher levels of prior spending even before the approval decision, with the entire distribution shifted to the right relative to non-approved customers.
+>
+> This pattern provides clear evidence of selection into credit card approval. Customers with higher baseline spending are more likely to be approved, and prior spending is also strongly predictive of future spending. As a result, a regression of post-approval spending on approval status that does not fully account for underlying purchasing propensity will suffer from omitted variable bias.
+>
+> Moreover, while prior spending is observed and can be controlled for, it is likely an imperfect proxy for deeper, unobserved factors such as shopping preferences, financial sophistication, or consumption needs. These unobserved factors simultaneously influence both credit card approval and subsequent spending, reinforcing concerns about endogeneity.
+>
+> 5\. EDA of Instrument
+
+```{r}
+iv_check <- df %>%
+  group_by(preapproval_mailer) %>%
+  summarise(
+    approval_rate = mean(treatment),
+    avg_spend90 = mean(spend90)
+  )
+
+iv_check
+```
+
+> This table reports summary statistics by pre-approval mailer status. Customers who receive a pre-approval mailer are substantially more likely to be approved for the retailer credit card, with an approval rate of approximately 33%, compared to about 17% among customers who do not receive a mailer.
+>
+> This large difference in approval rates indicates that the pre-approval mailer is strongly correlated with treatment assignment, satisfying the relevance condition for an instrumental variable. At the same time, customers who receive a mailer also exhibit higher average 90-day spending, which may reflect both the effect of approval and underlying selection.
+>
+> These patterns motivate the use of an instrumental variables framework to isolate exogenous variation in credit card approval induced by the mailer.
+>
+> 6\. How does EDA influence method choice?
+>
+> The exploratory data analysis reveals strong evidence of non-random selection into credit card approval. Approved customers differ systematically from non-approved customers in terms of prior spending, income, and credit characteristics, all of which are strongly correlated with future spending. In addition, the outcome variable is highly right-skewed, motivating the use of log-transformed spending in regression analysis.
+>
+> These patterns suggest that a simple regression of post-approval spending on approval status is likely subject to omitted variable bias, as unobserved factors such as underlying shopping preferences and financial sophistication may jointly influence both approval and spending. While regression adjustment can account for observable differences across customers, concerns about endogeneity remain. As a result, the EDA motivates the use of an instrumental variables approach to isolate exogenous variation in credit card approval.
+
+> 7\. What does the EDA suggest about the client's question?
+>
+> The EDA indicates a strong positive association between credit card approval and customer spending in the subsequent 90 days. Approved customers exhibit substantially higher average and median spending than non-approved customers. However, because approval is targeted toward higher-value customers, this association likely overstates the true causal effect of credit card approval on spending. The EDA therefore suggests that while credit card approval may increase customer spending, a causal interpretation requires econometric methods that explicitly address selection and endogeneity.
+
+### Part 5 - Methodology
+
+1.  **Non-technical Description:**
+
+> Because approval for a retailer credit card is targeted rather than randomly assigned, customers who are approved differ systematically from those who are not in ways that also affect future spending. As a result, a simple comparison of post-approval spending between approved and non-approved customers would reflect both the effect of approval and pre-existing differences in customer value. We therefore begin with regression adjustment to control for observable characteristics---such as income, credit score, age, and prior spending---that jointly influence approval and subsequent spending.
+>
+> However, even after conditioning on observed covariates, approval remains endogenous due to unobserved factors that affect both approval and spending. To address this remaining bias, we employ an instrumental variables approach that leverage variation in approval induced by a pre-approval mailer. Because outreach is targeted on observed credit attributes, we rely on conditional exogeneity: after controlling for the targeting covariates, mailer receipt provides plausibly exogenous variation in approval. This strategy allows us to isolate variation in credit card approval that is unrelated to customers' underlying spending propensity, providing a more credible estimate of the causal effect of approval on 90-day spending for customers whose approval status is influenced by the mailer.
+
+2.  **Technical Implementation**
+
+> **Baseline Regression Specifications**
+>
+> We estimate a sequence of linear models to evaluate the effect of credit card approval on 90-day customer spending. All models use spending in levels, consistent with the simulation and analysis code. We begin with a naïve specification that regresses post-approval spending on an approval indicator alone. This model serves as a benchmark and illustrates the bias introduced when approval is treated as exogenous.
+>
+> Next, we estimate a regression-adjusted model that adds observed pre-treatment covariates: age, income, credit score, prior spending, and promotional responsiveness. These controls are included because they are strong predictors of both approval and subsequent spending in the simulated data. This specification removes bias due to observable differences between approved and non-approved customers but remains inconsistent because approval depends on an unobserved latent trait that also affects spending.
+>
+> **Demonstrating Omitted Variable Bias**
+>
+> To explicitly demonstrate omitted variable bias, we estimate an oracle regression using the full simulated dataset that includes the unobserved confounder. This regression is included solely for diagnostic purposes and illustrates how excluding the latent trait biases conventional regression estimates. Even in this oracle setting, the linear-in-levels specification remains misspecified relative to the multiplicative outcome-generating process, reinforcing that both unobserved confounding and functional-form assumptions matter for causal estimation.
+>
+> **Instrumental Variables Estimation**
+>
+> To address endogeneity in approval status, we implement an instrumental variables estimator using receipt of a pre-approval mailer as an instrument. The IV estimation is carried out via two-stage least squares. In the first stage, approval is regressed on the mailer and the same set of observed covariates. In the second stage, spending is regressed on the fitted approval values and the observed covariates. This procedure isolates variation in approval induced by the mailer that is plausibly unrelated to unobserved spending propensity after conditioning on the observed targeting covariates. Instrument relevance is assessed by comparing first-stage models with and without the mailer using an ANOVA test, and results are cross-validated using a standard IV routine when available.
+
+3.  **Method Justification and Assumptions**
+
+> Credit card approval is not randomly assigned in the simulated data and depends on both observed customer characteristics and an unobserved latent trait that also affects future spending. As a result, a naïve regression of spending on approval is biased. Regression adjustment is used to control for observable differences between approved and non-approved customers, but it remains inconsistent because the unobserved confounder is omitted from the analysis dataset.
+>
+> Instrumental variables estimation is used to address this endogeneity. Receipt of a pre-approval mailer is chosen as an instrument because it strongly predicts approval and does not enter the outcome-generating process. Instrument relevance is supported by a significant first-stage relationship between the mailer and approval. Exogeneity and the exclusion restriction are satisfied conditionally. Because the mailer is targeted on observed credit attributes, unconditional independence need not hold. Instead, we rely on conditional exogeneity: after controlling for the observed targeting covariates (credit score, income, age, prior spending, and promo responsiveness), mailer receipt is treated as as-good-as-random with respect to unobserved spending propensity. By construction, the mailer does not enter the outcome equation directly, satisfying the exclusion restriction.
+>
+> The IV estimator identifies the causal effect of approval for customers whose approval status is influenced by the mailer. This local interpretation is appropriate for the application, as it captures the effect of expanding approval among marginal applicants. All models are estimated in levels to remain consistent with the simulation design and to report effects in dollar terms, acknowledging that skewness and treatment effect heterogeneity may affect magnitude but not identification.
+
+> **IV Assumptions (Conditional IV Design)**\
+>
+> **Relevance:** The mailer increases approval probability (tested in the first stage; we report the coefficient and F-statistic).
+>
+> **Independence:** Because outreach is targeted on observables, we assume that conditional on included controls (credit score, income, age, prior spending, promo responsiveness), mailer receipt is as-good-as-random with respect to unobserved spending propensity.
+>
+> **Exclusion Restriction:** The mailer affects 90-day spending only through approval.
+>
+> **Monotonicity (for LATE interpretation):** Receiving the mailer weakly increases the probability of approval for all customers. Under these assumptions, 2SLS identifies the causal effect for customers whose approval status is shifted by the mailer.
+
+4.  **Model Code**
+
+```{r}
+# naive regression
+lm(spend90 ~ treatment, data = observed_df)
+
+# regression adjustment with observed covariates
+lm(spend90 ~ treatment + age + income + credit_score + prior_spend + promo_responded,
+   data = observed_df)
+
+# oracle regression including unobserved confounder U (demonstration only)
+lm(spend90 ~ treatment + age + income + credit_score + prior_spend + promo_responded + U,
+   data = full_df)
+
+# IV (manual 2SLS)
+# first stage: predict treatment from instrument and covariates
+fs <- lm(treatment ~ preapproval_mailer + age + income + credit_score + prior_spend + promo_responded,
+         data = observed_df)
+
+# predicted treatment
+observed_df$treatment_hat <- predict(fs, newdata = observed_df)
+
+# second stage: regress outcome on predicted treatment and covariates
+lm(spend90 ~ treatment_hat + age + income + credit_score + prior_spend + promo_responded,
+   data = observed_df)
+
+# first-stage relevance test
+fs_reduced <- lm(treatment ~ age + income + credit_score + prior_spend + promo_responded,
+                 data = observed_df)
+anova(fs_reduced, fs)
+
+# IV via standard routine (AER::ivreg)
+if(requireNamespace("AER", quietly = TRUE)) {
+  library(AER)
+  ivreg(spend90 ~ treatment + age + income + credit_score + prior_spend + promo_responded |
+          preapproval_mailer + age + income + credit_score + prior_spend + promo_responded,
+        data = observed_df)
+}
+
+# additional diagnostics / comparisons
+estimates <- data.frame(
+  estimator = c("Naive", "Reg adj", "Oracle", "2SLS (manual)", "2SLS (ivreg)"),
+  estimate = c(coef(naive_lm)["treatment"],
+               coef(reg_adj)["treatment"],
+               coef(reg_with_U)["treatment"],
+               coef(iv_2sls)["treatment_hat"],
+               if(exists("iv_mod")) coef(iv_mod)["treatment"] else NA)
+)
+estimates
+```
+
+### Part 6 - Findings
+
+1.  Results Table
+
+```{r}
+library(knitr)
+results_table <- data.frame(
+  Model = c("Naive (no controls)",
+            "Regression Adjustment",
+            "Oracle Regression (includes U)",
+            "2SLS (manual)",
+            "2SLS (ivreg)"),
+  Estimated_Effect_USD = c(coef(naive_lm)["treatment"],
+                           coef(reg_adj)["treatment"],
+                           coef(reg_with_U)["treatment"],
+                           coef(iv_2sls)["treatment_hat"],
+                           if(exists("iv_mod")) coef(iv_mod)["treatment"] else NA)
+)
+
+kable(results_table,
+      digits = 1,
+      caption = "Estimated Effect of Credit Card Approval on 90-Day Spending (USD)")
+```
+
+The estimated effect varies substantially across models. The naive model shows a positive association, while regression-adjusted models are unstable due to skewness and model dependence. The IV estimates indicate a large positive causal effect for customers whose approval is influenced by the mailer.
+
+2.  Non-technical Summary
+
+Our analysis shows that customers who are approved for the retailer credit card spend substantially more in the following 90 days. However, much of this difference reflects the fact that approved customers were already higher-value shoppers before approval. Once we adjust for this selection, we still find evidence that approval increases spending, particularly for customers whose approval status is influenced by marketing outreach such as pre-approval mailers.
+
+From a business perspective, retailer credit cards are an effective lever to increase short-term customer spending, but the gains are concentrated among customers near the approval margin rather than all applicants. This suggests that targeted approval expansion is more profitable than broad approval.
+
+3.  Technical Summary
+
+**Naive vs Regression Adjustment**
+
+The naive regression shows that approved customers spend more, but this estimate reflects both causal impact and selection bias. Approved customers already had higher prior spending, income, and credit scores.
+
+Regression adjustment controls for observed differences, but the estimate becomes negative. This happens because the model conditions on strong predictors of approval, leaving identification to come from residual variation that is more tightly linked to the unobserved confounder. Combined with functional form misspecification (a linear model applied to a multiplicative outcome process), the regression-adjusted estimate can become unstable and even incorrectly signed. This illustrates that controlling for observables alone does not guarantee unbiased estimation when unobserved confounding remains.
+
+**Oracle Regression**
+
+Including the unobserved confounder removes selection bias by construction. However, the estimated treatment effect can still differ from the true effect because the regression assumes an additive treatment effect in levels, while the data-generating process is multiplicative on the mean scale. As a result, even with all confounders included, functional form misspecification can lead to misleading estimates.
+
+**Instrumental Variables (IV)**
+
+The IV estimates are much larger and consistent across both 2SLS implementations. IV identifies a LATE for customers whose approval is influenced by the mailer. These customers are typically closer to the approval margin, so the IV estimate should be interpreted as the effect of expanding approvals via outreach among marginal customers rather than the average effect for all customers.
+
+The IV interpretation relies on:
+
+-   Strong relevance of the mailer for approval
+
+-   Conditional exogeneity given observed covariates
+
+```{r}
+
+# Naive
+lm(spend90 ~ treatment, data = observed_df)
+
+# Regression adjustment
+lm(spend90 ~ treatment + age + income + credit_score + prior_spend + promo_responded,
+   data = observed_df)
+
+# IV
+library(AER)
+ivreg(spend90 ~ treatment + age + income + credit_score + prior_spend + promo_responded |
+        preapproval_mailer + age + income + credit_score + prior_spend + promo_responded,
+      data = observed_df)
+
+balance_by_mailer <- observed_df %>%
+  group_by(preapproval_mailer) %>%
+  summarise(
+    n = n(),
+    avg_age = mean(age),
+    avg_income = mean(income),
+    avg_credit_score = mean(credit_score),
+    avg_prior_spend = mean(prior_spend),
+    avg_promo_responded = mean(promo_responded)
+  )
+
+knitr::kable(balance_by_mailer, digits = 2,
+             caption = "Balance Check: Observed Covariates by Mailer Status")
+
+fs <- lm(treatment ~ preapproval_mailer + age + income + credit_score + prior_spend + promo_responded,
+         data = observed_df)
+
+fs_reduced <- lm(treatment ~ age + income + credit_score + prior_spend + promo_responded,
+                 data = observed_df)
+
+anova_fs <- anova(fs_reduced, fs)
+
+fs_coef <- summary(fs)$coefficients["preapproval_mailer", c("Estimate","Std. Error","Pr(>|t|)")]
+
+first_stage_table <- data.frame(
+  term = "preapproval_mailer",
+  estimate = fs_coef["Estimate"],
+  std_error = fs_coef["Std. Error"],
+  p_value = fs_coef["Pr(>|t|)"],
+  first_stage_F = anova_fs$F[2]
+)
+
+knitr::kable(first_stage_table, digits = 3,
+             caption = "First Stage: Effect of Mailer on Approval (with Controls)")
+
+```
+
+Because the mailer is targeted using observed credit score, we expect systematic differences in observed covariates between mailer and non-mailer groups. This is not a violation of IV by itself. Because outreach is targeted using observable credit attributes, mailer receipt is not unconditionally random. Our identification instead relies on conditional exogeneity: after controlling for the same targeting covariates (credit score, income, prior spend, age, and promo responsiveness), residual variation in mailer receipt is assumed to be unrelated to unobserved determinants of spending. The balance table is therefore used as a transparency check showing the primary drivers of targeting, and the control set is chosen to match that targeting rule.
+
+The first stage shows the mailer significantly increases approval probability, satisfying instrument relevance. The first-stage F-statistic indicates the instrument is sufficiently strong for 2SLS in this simulated setting.
+
+4.  Business Implications
+
+**Strategic Insights**
+
+-   Credit card approval increases short-term customer spending.
+
+-   Most of the raw spending difference reflects customer selection.
+
+-   The largest incremental gains come from marginal customers, not universally across all applicants.
+
+**Operational Implications**
+
+-   Focus approval expansion on customers near the approval threshold.
+
+-   Use pre-approval mailers strategically to shift approval among high-potential customers.
+
+-   Integrate behavioral data (prior spending, engagement) with credit policies.
+
+**Financial Impact**
+
+Expanding approval indiscriminately may dilute profitability due to risk and low responsiveness. Targeted approval strategies can maximize incremental spending while controlling credit exposure.
